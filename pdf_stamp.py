@@ -228,14 +228,38 @@ def build_form_xobject(
             content_w, content_h, date_str,
             date_font_size, date_color_hex, date_y_ratio, date_font
         )
+        # ★ writer.append() で date PDF を取り込む
+        #    → FontFile2 等の間接オブジェクトが writer 内に登録され
+        #      TTF フォントが PDF に正しく埋め込まれる（deepcopy では解決不可）
         date_reader = PdfReader(io.BytesIO(date_pdf))
-        date_page = date_reader.pages[0]
-        raw_date = date_page["/Contents"].get_object().get_data()
-        date_res = date_page.get("/Resources", DictionaryObject())
+        writer.append(date_reader)
+        date_page_w = writer.pages[-1]
+        raw_date = date_page_w["/Contents"].get_object().get_data()
+        date_res = date_page_w.get("/Resources", DictionaryObject())
         if hasattr(date_res, "get_object"):
             date_res = date_res.get_object()
-        merge_font_resources(merged_res, date_res, writer)
+        # フォントキーを merged_res にマージ（writer 内参照を維持）
+        date_fonts = date_res.get("/Font", {})
+        if hasattr(date_fonts, "get_object"):
+            date_fonts = date_fonts.get_object()
+        if date_fonts:
+            if NameObject("/Font") not in merged_res:
+                merged_res[NameObject("/Font")] = DictionaryObject()
+            base_fonts = merged_res[NameObject("/Font")]
+            if hasattr(base_fonts, "get_object"):
+                base_fonts = base_fonts.get_object()
+            for k, v in date_fonts.items():
+                nk = k
+                while NameObject(nk) in base_fonts:
+                    nk = "/d_" + nk.lstrip("/")
+                base_fonts[NameObject(nk)] = v  # writer 内参照をそのまま使用
+                if nk != k:
+                    raw_date = raw_date.replace(
+                        (k + " ").encode(), (nk + " ").encode()
+                    )
         form_stream += b"\n" + raw_date
+        # 追加した date ページを後で削除するためカウントを記録
+        writer._date_page_count = getattr(writer, "_date_page_count", 0) + 1
 
     xobj = DecodedStreamObject()
     xobj.set_data(form_stream)
@@ -294,12 +318,10 @@ def stamp_pdf(target_path: str, cfg: configparser.RawConfigParser) -> str:
     base_dir = os.path.dirname(os.path.abspath(target_path))
 
     stamp_file     = cfg_get(cfg, "stamp_file",    "Stamp.pdf")
-    # Stamp.pdf 検索: ① target と同フォルダー ② script/EXE と同フォルダー
-    _script_dir = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
-                   else os.path.dirname(os.path.abspath(__file__)))
+    # Stamp.pdf 検索: ① target と同フォルダー ② EXE と同フォルダー
     stamp_path = (os.path.join(base_dir, stamp_file)
                   if os.path.isfile(os.path.join(base_dir, stamp_file))
-                  else os.path.join(_script_dir, stamp_file))
+                  else os.path.join(get_exe_dir(), stamp_file))
 
     stamp_w_mm     = float(cfg_get(cfg, "stamp_width",    30))
     stamp_h_mm_cfg = float(cfg_get(cfg, "stamp_height",    0))  # 0 = アスペクト比自動
@@ -427,10 +449,10 @@ def stamp_pdf(target_path: str, cfg: configparser.RawConfigParser) -> str:
 
         writer.add_annotation(page_number=offset + i, annotation=annot)
 
-    # スタンプ用ページを削除
-    for _ in range(stamp_page_count):
+    # スタンプ用ページ＋日付レイヤー用ページを削除
+    total_extra = stamp_page_count + getattr(writer, "_date_page_count", 0)
+    for _ in range(total_extra):
         writer.remove_page(0)
-
     base, ext = os.path.splitext(target_path)
     out_path = target_path if overwrite else base + suffix + ext
 
