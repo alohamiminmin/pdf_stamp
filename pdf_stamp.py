@@ -290,7 +290,7 @@ def _draw_char_outline(c, glyph, glyphset, x_cursor, y_base, scale, r, g, b):
     TrueType グリフの contour を完全解析し、
     ReportLab の複合パスとして描画する（穴が正しく抜ける）
     """
-    gobj = glyph._glyph
+    gobj = glyph.glyph  # ★ここが重要（glyph._glyph → glyph.glyph）
     coords = gobj.coordinates
     flags  = gobj.flags
     ends   = gobj.endPtsOfContours
@@ -342,6 +342,7 @@ def _draw_char_outline(c, glyph, glyphset, x_cursor, y_base, scale, r, g, b):
     # even-odd で塗りつぶし（穴が正しく抜ける）
     c.setFillColorRGB(r, g, b)
     c.drawPath(path, fill=1, stroke=0, fillMode=1)
+
 
 def make_date_layer_outlined(w, h, date_str, font_size, color_hex, y_ratio, font_info):
     """
