@@ -241,14 +241,48 @@ def outline_stamp_pdf(stamp_path: str) -> bytes:
     PDF バイト列を返す。
     PyMuPDF の SVG 変換経由でフォント埋め込みを完全に除去する。
     フォントの著作権フラグ（fsType）による警告が発生しなくなる。
+
+    tobytes() が失敗する環境（Windows版 PyMuPDF の一部バージョン）では
+    convert_to_pdf() → save() の順でフォールバックする。
     """
     doc = pymupdf.open(stamp_path)
     page = doc[0]
     svg = page.get_svg_image(matrix=pymupdf.Matrix(1, 1))
     doc.close()
-    svg_doc = pymupdf.open("svg", svg.encode())
-    result = svg_doc.tobytes()
+
+    svg_doc = pymupdf.open(stream=svg.encode(), filetype="svg")
+    result = None
+
+    # 方法1: convert_to_pdf()
+    try:
+        result = svg_doc.convert_to_pdf()
+    except Exception:
+        pass
+
+    # 方法2: save() で BytesIO に書き出す
+    if not result:
+        try:
+            _buf = io.BytesIO()
+            svg_doc.save(_buf)
+            result = _buf.getvalue()
+        except Exception:
+            pass
+
+    # 方法3: tobytes()（Linux / 旧バージョン用）
+    if not result:
+        try:
+            result = svg_doc.tobytes()
+        except Exception:
+            pass
+
     svg_doc.close()
+
+    if not result:
+        # すべて失敗 → 元の Stamp.pdf をそのまま使う
+        with open(stamp_path, "rb") as f:
+            result = f.read()
+        print("[警告] Stamp.pdf のアウトライン化に失敗しました。元ファイルを使用します。")
+
     return result
 
 
