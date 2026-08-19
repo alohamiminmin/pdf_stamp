@@ -36,8 +36,8 @@ pdfmetrics.registerFont(TTFont('MS-Gothic', r'C:\Windows\Fonts\msgothic.ttc', su
 pdfmetrics.registerFont(TTFont('MS-Mincho', r'C:\Windows\Fonts\msmincho.ttc', subfontIndex=0))
 
 # 3. 遊ゴシック / 遊明朝
-pdfmetrics.registerFont(TTFont('Yu-Gothic', r'C:\Windows\Fonts\yugothic.ttf'))
-pdfmetrics.registerFont(TTFont('Yu-Gothic-Bold', r'C:\Windows\Fonts\yugothib.ttf'))
+pdfmetrics.registerFont(TTFont('Yu-Gothic', r'C:\Windows\Fonts\YuGothR.ttc'))
+pdfmetrics.registerFont(TTFont('Yu-Gothic-Bold', r'C:\Windows\Fonts\YuGothB.ttc'))
 pdfmetrics.registerFont(TTFont('Yu-Mincho', r'C:\Windows\Fonts\yumin.ttf'))
 
 # 4. Arial (欧文フォント) ※.ttf形式なのでシンプルに登録可能
