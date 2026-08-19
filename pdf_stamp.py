@@ -20,6 +20,30 @@ from reportlab.lib.units import mm
 import fitz  # PyMuPDF
 from PIL import Image  # Pillow（JPEG2000書き出し用。PyMuPDF単体ではJP2出力不可）
 
+#Windows標準フォント登録
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+# 1. メイリオ (Meiryo / Meiryo UI)
+# ※.ttcファイルは、第2引数に「subfontIndex」を指定してフォントを切り替えます
+pdfmetrics.registerFont(TTFont('Meiryo', r'C:\Windows\Fonts\meiryo.ttc', subfontIndex=0))
+pdfmetrics.registerFont(TTFont('Meiryo-Bold', r'C:\Windows\Fonts\meiryob.ttc', subfontIndex=0))
+pdfmetrics.registerFont(TTFont('MeiryoUI', r'C:\Windows\Fonts\meiryo.ttc', subfontIndex=1))       # UI用
+pdfmetrics.registerFont(TTFont('MeiryoUI-Bold', r'C:\Windows\Fonts\meiryob.ttc', subfontIndex=1))  # UI用 Bold
+
+# 2. ＭＳ ゴシック / ＭＳ 明朝
+pdfmetrics.registerFont(TTFont('MS-Gothic', r'C:\Windows\Fonts\msgothic.ttc', subfontIndex=0))
+pdfmetrics.registerFont(TTFont('MS-Mincho', r'C:\Windows\Fonts\msmincho.ttc', subfontIndex=0))
+
+# 3. 遊ゴシック / 遊明朝
+pdfmetrics.registerFont(TTFont('Yu-Gothic', r'C:\Windows\Fonts\yu-gothic\yugothic.ttf'))
+pdfmetrics.registerFont(TTFont('Yu-Gothic-Bold', r'C:\Windows\Fonts\yu-gothic\yugothib.ttf'))
+pdfmetrics.registerFont(TTFont('Yu-Mincho', r'C:\Windows\Fonts\yumin.ttf'))
+
+# 4. Arial (欧文フォント) ※.ttf形式なのでシンプルに登録可能
+pdfmetrics.registerFont(TTFont('Arial', r'C:\Windows\Fonts\arial.ttf'))
+pdfmetrics.registerFont(TTFont('Arial-Bold', r'C:\Windows\Fonts\arialbd.ttf'))
+
 
 # ─────────────────────────────────────────────────────────
 #  設定読み込み
