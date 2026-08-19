@@ -18,31 +18,10 @@ from pypdf.generic import (
 from reportlab.pdfgen import canvas as rl_canvas
 from reportlab.lib.units import mm
 import fitz  # PyMuPDF
+import pymupdf
+from fontTools import ttLib
+from fontTools.pens.basePen import BasePen
 from PIL import Image  # Pillow（JPEG2000書き出し用。PyMuPDF単体ではJP2出力不可）
-
-#Windows標準フォント登録
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-
-# 1. メイリオ (Meiryo / Meiryo UI)
-# ※.ttcファイルは、第2引数に「subfontIndex」を指定してフォントを切り替えます
-pdfmetrics.registerFont(TTFont('Meiryo', r'C:\Windows\Fonts\meiryo.ttc', subfontIndex=0))
-pdfmetrics.registerFont(TTFont('Meiryo-Bold', r'C:\Windows\Fonts\meiryob.ttc', subfontIndex=0))
-pdfmetrics.registerFont(TTFont('MeiryoUI', r'C:\Windows\Fonts\meiryo.ttc', subfontIndex=1))       # UI用
-pdfmetrics.registerFont(TTFont('MeiryoUI-Bold', r'C:\Windows\Fonts\meiryob.ttc', subfontIndex=1))  # UI用 Bold
-
-# 2. ＭＳ ゴシック / ＭＳ 明朝
-pdfmetrics.registerFont(TTFont('MS-Gothic', r'C:\Windows\Fonts\msgothic.ttc', subfontIndex=0))
-pdfmetrics.registerFont(TTFont('MS-Mincho', r'C:\Windows\Fonts\msmincho.ttc', subfontIndex=0))
-
-# 3. 遊ゴシック / 遊明朝
-pdfmetrics.registerFont(TTFont('Yu-Gothic', r'C:\Windows\Fonts\YuGothR.ttc'))
-pdfmetrics.registerFont(TTFont('Yu-Gothic-Bold', r'C:\Windows\Fonts\YuGothB.ttc'))
-pdfmetrics.registerFont(TTFont('Yu-Mincho', r'C:\Windows\Fonts\yumin.ttf'))
-
-# 4. Arial (欧文フォント) ※.ttf形式なのでシンプルに登録可能
-pdfmetrics.registerFont(TTFont('Arial', r'C:\Windows\Fonts\arial.ttf'))
-pdfmetrics.registerFont(TTFont('Arial-Bold', r'C:\Windows\Fonts\arialbd.ttf'))
 
 
 # ─────────────────────────────────────────────────────────
@@ -161,6 +140,35 @@ def resolve_font(font_name: str) -> str:
         return "Helvetica-Bold"
 
 
+def resolve_font_info(font_name: str):
+    """
+    フォント名からアウトライン化に使う (font_path, subfont_index) を返す。
+    組み込みフォント（Helvetica等）の場合は None を返す
+    → 呼び出し側で従来の描画にフォールバックする。
+    Windowsフォントが見つからない場合も None を返す。
+    """
+    BUILTIN = {
+        "helvetica", "helvetica-bold", "helvetica-oblique", "helvetica-boldoblique",
+        "times-roman", "times-bold", "times-italic", "times-bolditalic",
+        "courier", "courier-bold", "courier-oblique", "courier-boldoblique",
+    }
+    if font_name.lower() in BUILTIN:
+        return None  # 組み込みフォント → アウトライン化不要
+
+    key = _normalize_font_name(font_name)
+    if key not in _FONT_FILE_MAP:
+        return None  # 未対応フォント → フォールバック
+
+    ttf_file, ttc_index = _FONT_FILE_MAP[key]
+    for d in _WIN_FONT_DIRS:
+        candidate = os.path.join(d, ttf_file)
+        if os.path.isfile(candidate):
+            return (candidate, ttc_index if ttc_index is not None else 0)
+
+    return None  # ファイルが見つからない → フォールバック
+
+
+
 # ─────────────────────────────────────────────────────────
 #  スタンプの実描画領域
 # ─────────────────────────────────────────────────────────
@@ -224,6 +232,109 @@ def make_date_layer(w, h, date_str, font_size, color_hex, y_ratio, font_name):
 
 
 # ─────────────────────────────────────────────────────────
+#  テキストアウトライン化
+# ─────────────────────────────────────────────────────────
+
+def outline_stamp_pdf(stamp_path: str) -> bytes:
+    """
+    Stamp.pdf を読み込み、すべてのテキストをパス（アウトライン）に変換した
+    PDF バイト列を返す。
+    PyMuPDF の SVG 変換経由でフォント埋め込みを完全に除去する。
+    フォントの著作権フラグ（fsType）による警告が発生しなくなる。
+    """
+    doc = pymupdf.open(stamp_path)
+    page = doc[0]
+    svg = page.get_svg_image(matrix=pymupdf.Matrix(1, 1))
+    doc.close()
+    svg_doc = pymupdf.open("svg", svg.encode())
+    result = svg_doc.tobytes()
+    svg_doc.close()
+    return result
+
+
+def _draw_char_outline(c, glyph, glyphset, x_cursor, y_base, scale, r, g, b):
+    """1文字分のグリフをcanvasにパスとして直接描画する"""
+    class _Pen(BasePen):
+        def __init__(self, gs, cv, xo, yo, s):
+            super().__init__(gs)
+            self.cv = cv; self.xo = xo; self.yo = yo; self.s = s
+            self.path = None
+        def tx(self, px): return self.xo + px * self.s
+        def ty(self, py): return self.yo + py * self.s
+        def _moveTo(self, pt):
+            if self.path is None:
+                self.path = self.cv.beginPath()
+            self.path.moveTo(self.tx(pt[0]), self.ty(pt[1]))
+        def _lineTo(self, pt):
+            self.path.lineTo(self.tx(pt[0]), self.ty(pt[1]))
+        def _curveToOne(self, p1, p2, p3):
+            self.path.curveTo(
+                self.tx(p1[0]), self.ty(p1[1]),
+                self.tx(p2[0]), self.ty(p2[1]),
+                self.tx(p3[0]), self.ty(p3[1]))
+        def _closePath(self):
+            self.path.close()
+            self.cv.drawPath(self.path, fill=1, stroke=0)
+            self.path = None
+        def _endPath(self):
+            if self.path:
+                self.cv.drawPath(self.path, fill=1, stroke=0)
+                self.path = None
+
+    pen = _Pen(glyphset, c, x_cursor, y_base, scale)
+    glyph.draw(pen)
+
+
+def make_date_layer_outlined(w, h, date_str, font_size, color_hex, y_ratio, font_info):
+    """
+    日付テキストをフォント埋め込みなしのアウトライン（パス）として描画した
+    PDF バイト列を返す。
+    font_info: (font_path, subfont_index)
+    """
+    font_path, subfont_index = font_info
+    tt = ttLib.TTFont(font_path, fontNumber=subfont_index)
+    glyphset = tt.getGlyphSet()
+    upm      = tt['head'].unitsPerEm
+    cmap     = tt.getBestCmap()
+    scale    = font_size / upm
+
+    # テキスト幅を計算（センタリング用）
+    total_w = sum(
+        glyphset[cmap[ord(ch)]].width * scale
+        for ch in date_str
+        if ord(ch) in cmap and cmap.get(ord(ch)) in glyphset
+    )
+    x_start = (w - total_w) / 2.0
+    y_base  = h * y_ratio - font_size / 2.0
+
+    r, g, b = hex_to_rgb(color_hex)
+
+    buf = io.BytesIO()
+    c = rl_canvas.Canvas(buf, pagesize=(w, h))
+    c.saveState()
+    c.setFillColorRGB(r, g, b)
+
+    x_cursor = x_start
+    for ch in date_str:
+        cp = ord(ch)
+        if cp not in cmap:
+            x_cursor += font_size * 0.5
+            continue
+        glyph_name = cmap[cp]
+        glyph = glyphset.get(glyph_name)
+        if glyph is None:
+            x_cursor += font_size * 0.5
+            continue
+        _draw_char_outline(c, glyph, glyphset, x_cursor, y_base, scale, r, g, b)
+        x_cursor += glyph.width * scale
+
+    c.restoreState()
+    c.save()
+    buf.seek(0)
+    return buf.read()
+
+
+# ─────────────────────────────────────────────────────────
 #  FormXObject（スタンプ本体）
 # ─────────────────────────────────────────────────────────
 
@@ -248,10 +359,20 @@ def build_form_xobject(
     )
 
     if date_str:
-        date_pdf = make_date_layer(
-            content_w, content_h, date_str,
-            date_font_size, date_color_hex, date_y_ratio, date_font
-        )
+        # フォントのアウトライン化情報を取得
+        font_info = resolve_font_info(date_font)
+        if font_info:
+            # Windowsフォント → アウトライン化（フォント埋め込み不要）
+            date_pdf = make_date_layer_outlined(
+                content_w, content_h, date_str,
+                date_font_size, date_color_hex, date_y_ratio, font_info
+            )
+        else:
+            # 組み込みフォント（Helvetica等）→ 従来の描画
+            date_pdf = make_date_layer(
+                content_w, content_h, date_str,
+                date_font_size, date_color_hex, date_y_ratio, date_font
+            )
         # ★ writer.append() で date PDF を取り込む
         #    → FontFile2 等の間接オブジェクトが writer 内に登録され
         #      TTF フォントが PDF に正しく埋め込まれる（deepcopy では解決不可）
@@ -370,8 +491,9 @@ def stamp_pdf(target_path: str, cfg: configparser.RawConfigParser) -> str:
     if not os.path.isfile(stamp_path):
         raise FileNotFoundError(f"スタンプファイルが見つかりません: {stamp_path}")
 
-    # スタンプPDF読み込み
-    stamp_reader = PdfReader(stamp_path)
+    # スタンプPDF読み込み（テキストをアウトライン化してフォント埋め込みを除去）
+    outlined_stamp_bytes = outline_stamp_pdf(stamp_path)
+    stamp_reader = PdfReader(io.BytesIO(outlined_stamp_bytes))
     cx0, cy0, cx1, cy1 = get_content_box(stamp_reader)
     content_w = cx1 - cx0
     content_h = cy1 - cy0
