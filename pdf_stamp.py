@@ -285,39 +285,63 @@ def outline_stamp_pdf(stamp_path: str) -> bytes:
 
     return result
 
-
 def _draw_char_outline(c, glyph, glyphset, x_cursor, y_base, scale, r, g, b):
-    """1文字分のグリフをcanvasにパスとして直接描画する"""
-    class _Pen(BasePen):
-        def __init__(self, gs, cv, xo, yo, s):
-            super().__init__(gs)
-            self.cv = cv; self.xo = xo; self.yo = yo; self.s = s
-            self.path = None
-        def tx(self, px): return self.xo + px * self.s
-        def ty(self, py): return self.yo + py * self.s
-        def _moveTo(self, pt):
-            if self.path is None:
-                self.path = self.cv.beginPath()
-            self.path.moveTo(self.tx(pt[0]), self.ty(pt[1]))
-        def _lineTo(self, pt):
-            self.path.lineTo(self.tx(pt[0]), self.ty(pt[1]))
-        def _curveToOne(self, p1, p2, p3):
-            self.path.curveTo(
-                self.tx(p1[0]), self.ty(p1[1]),
-                self.tx(p2[0]), self.ty(p2[1]),
-                self.tx(p3[0]), self.ty(p3[1]))
-        def _closePath(self):
-            self.path.close()
-            self.cv.drawPath(self.path, fill=1, stroke=0)
-            self.path = None
-        def _endPath(self):
-            if self.path:
-                self.cv.drawPath(self.path, fill=1, stroke=0)
-                self.path = None
+    """
+    TrueType グリフの contour を完全解析し、
+    ReportLab の複合パスとして描画する（穴が正しく抜ける）
+    """
+    gobj = glyph._glyph
+    coords = gobj.coordinates
+    flags  = gobj.flags
+    ends   = gobj.endPtsOfContours
 
-    pen = _Pen(glyphset, c, x_cursor, y_base, scale)
-    glyph.draw(pen)
+    path = c.beginPath()
+    start = 0
 
+    for end in ends:
+        # contour の開始点
+        p0 = coords[start]
+        path.moveTo(x_cursor + p0[0] * scale, y_base + p0[1] * scale)
+
+        i = start + 1
+        while i <= end:
+            p = coords[i]
+            x = x_cursor + p[0] * scale
+            y = y_base + p[1] * scale
+
+            if flags[i] & 1:  # on-curve
+                path.lineTo(x, y)
+
+            else:
+                # off-curve → 次の点と組み合わせて curveTo
+                if i < end:
+                    p2 = coords[i+1]
+                    if flags[i+1] & 1:  # 次が on-curve
+                        cx = x
+                        cy = y
+                        x2 = x_cursor + p2[0] * scale
+                        y2 = y_base + p2[1] * scale
+                        path.curveTo(cx, cy, cx, cy, x2, y2)
+                        i += 1
+                    else:
+                        # off-off → 中間点を on-curve とみなす
+                        mid = ((p[0] + p2[0]) / 2, (p[1] + p2[1]) / 2)
+                        cx = x
+                        cy = y
+                        mx = x_cursor + mid[0] * scale
+                        my = y_base + mid[1] * scale
+                        path.curveTo(cx, cy, cx, cy, mx, my)
+                else:
+                    pass
+
+            i += 1
+
+        path.close()
+        start = end + 1
+
+    # even-odd で塗りつぶし（穴が正しく抜ける）
+    c.setFillColorRGB(r, g, b)
+    c.drawPath(path, fill=1, stroke=0, fillMode=1)
 
 def make_date_layer_outlined(w, h, date_str, font_size, color_hex, y_ratio, font_info):
     """
